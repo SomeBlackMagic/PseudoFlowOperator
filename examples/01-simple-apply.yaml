@@ -1,0 +1,43 @@
+
+apiVersion: ops.example.com/v1alpha1
+kind: PseudoFlow
+metadata:
+  name: demo-apply
+  namespace: default
+spec:
+  vars:
+    app: "demo"
+  steps:
+    - type: log
+      message: "start deploy ${app}"
+    - type: apply
+      manifests: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${app}-cm
+          namespace: default
+        data:
+          k: v
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${app}
+          namespace: default
+        spec:
+          replicas: 1
+          selector: { matchLabels: { app: ${app} } }
+          template:
+            metadata: { labels: { app: ${app} } }
+            spec:
+              containers:
+                - name: nginx
+                  image: nginx:1.27-alpine
+                  ports: [{ containerPort: 80 }]
+    - type: waitFor
+      resource: { apiVersion: apps/v1, kind: Deployment, name: ${app}, namespace: default }
+      condition: Ready
+      timeoutSeconds: 300
+    - type: log
+      message: "done: ${app}"

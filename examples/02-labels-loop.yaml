@@ -1,0 +1,20 @@
+
+apiVersion: ops.example.com/v1alpha1
+kind: PseudoFlow
+metadata:
+  name: label-nodes
+  namespace: default
+spec:
+  vars:
+    nodes: "node1 node2 node3"
+  steps:
+    - type: loop
+      forEach: "${nodes}"
+      steps:
+        - type: setLabel
+          target: { kind: Node, name: "${item}" }
+          labels:
+            env: "stage"
+    - type: removeLabel
+      target: { kind: Node, selector: "env=stage" }
+      keys: ["old"]
