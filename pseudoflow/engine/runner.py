@@ -174,6 +174,7 @@ class FlowEngine:
             if wait_all:
                 await asyncio.gather(*coros)
             else:
+                # FIX: Используем asyncio.wait с return_when=asyncio.FIRST_EXCEPTION
                 await asyncio.wait(coros, return_when=asyncio.FIRST_EXCEPTION)
             return
 
@@ -235,7 +236,7 @@ def _eval_condition(apis, condition: Dict[str, Any], default_ns: Optional[str]) 
     res = condition.get("resource")
     if not res:
         return False
-    json_path = condition.get("jsonPath")  # Renamed to json_path for PEP8
+    json_path = condition.get("jsonPath")  # FIX: PEP8 jsonPath -> json_path
     op = condition.get("op", "equals")
     value = condition.get("value", "")
 
@@ -260,7 +261,7 @@ def _eval_condition(apis, condition: Dict[str, Any], default_ns: Optional[str]) 
         else:
             group, version = "", gv
 
-        # 1. Core Resources
+        # 1. Core Resources (v1)
         if group == "" and version == "v1":
             if kind == "ConfigMap":
                 obj = core.read_namespaced_config_map(name, ns)
@@ -273,10 +274,10 @@ def _eval_condition(apis, condition: Dict[str, Any], default_ns: Optional[str]) 
             elif kind == "Node":
                 obj = core.read_node(name)
             else:
-                return False
+                pass
 
-        # 2. Apps Resources
-        elif group == "apps":
+        # 2. Apps Resources (apps/v1)
+        elif group == "apps" and version == "v1":
             if kind == "Deployment":
                 obj = apps.read_namespaced_deployment(name, ns)
             elif kind == "DaemonSet":
@@ -284,11 +285,11 @@ def _eval_condition(apis, condition: Dict[str, Any], default_ns: Optional[str]) 
             elif kind == "StatefulSet":
                 obj = apps.read_namespaced_stateful_set(name, ns)
             else:
-                return False
+                pass
 
-        # 3. Custom Resources (CRDs) через CustomObjectsApi
-        else:
-            # Простая эвристика для plural (можно улучшить через discovery, но для MVP достаточно)
+        # 3. Custom Resources (CRDs) и остальные
+        if obj is None:
+            # Превращаем kind в plural (простая эвристика)
             plural = kind.lower() + "s"
             try:
                 obj_dict = custom.get_namespaced_custom_object(
@@ -298,7 +299,6 @@ def _eval_condition(apis, condition: Dict[str, Any], default_ns: Optional[str]) 
                     plural=plural,
                     name=name
                 )
-                # CustomObjectsApi возвращает dict
                 data = obj_dict
             except client.exceptions.ApiException:
                 return False
@@ -314,7 +314,7 @@ def _eval_condition(apis, condition: Dict[str, Any], default_ns: Optional[str]) 
             data = obj
     elif obj:
         data = obj
-    elif 'data' not in locals():  # Если obj=None и мы не зашли в ветку custom
+    elif 'data' not in locals():
         return False
 
     matches = [m.value for m in jp_parse(json_path).find(data)] if json_path else [data]
