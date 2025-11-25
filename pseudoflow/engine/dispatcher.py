@@ -19,6 +19,7 @@ from pseudoflow.steps import (
     patch_label as step_patch_label,
     template as step_template,
     script as step_script,
+    eval as step_eval,  # <-- Импортируем новый модуль
 )
 
 Handler = Callable[[dict, FlowContext], Awaitable[None]]
@@ -41,6 +42,7 @@ _HANDLERS: Dict[str, Handler] = {
     "patchLabel": step_patch_label.handle,
     "template": step_template.handle,
     "script": step_script.handle,
+    "eval": step_eval.handle,  # <-- Регистрируем handler
 }
 
 

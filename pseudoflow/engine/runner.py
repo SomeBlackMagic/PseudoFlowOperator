@@ -5,6 +5,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from jsonpath_ng import parse as jp_parse
+from kubernetes import client
 
 from .context import FlowContext
 from .dispatcher import execute_step
@@ -13,6 +14,8 @@ from pseudoflow.util.templating import render_str
 
 logger = logging.getLogger("pseudoflow.engine")
 
+
+# ... (RunResult и FlowEngine остаются без изменений) ...
 
 class RunResult:
     def __init__(self):
@@ -68,11 +71,11 @@ class FlowEngine:
         return result
 
     async def _run_step(
-        self,
-        step: Dict[str, Any],
-        ctx: FlowContext,
-        prev_failed: bool,
-        last_error: Optional[Exception],
+            self,
+            step: Dict[str, Any],
+            ctx: FlowContext,
+            prev_failed: bool,
+            last_error: Optional[Exception],
     ):
         stype = step.get("type")
         if not stype:
@@ -237,43 +240,108 @@ def _eval_condition(apis, condition: Dict[str, Any], default_ns: Optional[str]) 
     jsonPath = condition.get("jsonPath")
     op = condition.get("op", "equals")
     value = condition.get("value", "")
+
+    # Парсинг GVK
     gv = res.get("apiVersion", "v1")
     kind = res.get("kind")
     name = res.get("name")
     ns = res.get("namespace", default_ns)
 
+    if not kind or not name:
+        return False
+
     core = apis["core"]
     apps = apis["apps"]
+    custom = apis["custom"]
 
     obj = None
     try:
-        if gv == "v1" and kind == "ConfigMap":
-            obj = core.read_namespaced_config_map(name, ns)
-        elif gv == "v1" and kind == "Service":
-            obj = core.read_namespaced_service(name, ns)
-        elif gv == "apps/vv" and kind == "Deployment":
-            obj = apps.read_namespaced_deployment(name, ns)
-        elif gv == "apps/v1" and kind == "DaemonSet":
-            obj = apps.read_namespaced_daemon_set(name, ns)
+        # Пытаемся определить метод загрузки на основе GVK
+        if "/" in gv:
+            group, version = gv.split("/", 1)
         else:
-            return False
-    except Exception:
+            group, version = "", gv
+
+        # 1. Core Resources
+        if group == "" and version == "v1":
+            if kind == "ConfigMap":
+                obj = core.read_namespaced_config_map(name, ns)
+            elif kind == "Service":
+                obj = core.read_namespaced_service(name, ns)
+            elif kind == "Pod":
+                obj = core.read_namespaced_pod(name, ns)
+            elif kind == "Secret":
+                obj = core.read_namespaced_secret(name, ns)
+            elif kind == "Node":
+                obj = core.read_node(name)  # Node не в namespace
+            else:
+                # Попытка fallback, но core-методы специфичны
+                return False
+
+        # 2. Apps Resources
+        elif group == "apps":
+            if kind == "Deployment":
+                obj = apps.read_namespaced_deployment(name, ns)
+            elif kind == "DaemonSet":
+                obj = apps.read_namespaced_daemon_set(name, ns)
+            elif kind == "StatefulSet":
+                obj = apps.read_namespaced_stateful_set(name, ns)
+            else:
+                return False
+
+        # 3. Custom Resources (CRDs) и всё остальное через CustomObjectsApi
+        else:
+            # Превращаем kind в plural (простая эвристика, лучше бы иметь discovery)
+            plural = kind.lower() + "s"
+            try:
+                obj_dict = custom.get_namespaced_custom_object(
+                    group=group,
+                    version=version,
+                    namespace=ns,
+                    plural=plural,
+                    name=name
+                )
+                # CustomObjectsApi возвращает dict, а не объект модели
+                data = obj_dict
+            except client.exceptions.ApiException as e:
+                if e.status != 404:
+                    logger.warning(f"Failed to fetch custom object: {e}")
+                return False
+
+    except Exception as e:
+        logger.debug(f"Resource check failed ({kind}/{name}): {e}")
         return False
 
-    data = obj.to_dict()
+    # Унификация данных (модель -> dict)
+    if obj and not isinstance(obj, dict):
+        data = obj.to_dict()
+    elif obj:
+        data = obj
+    else:
+        return False  # Объект не найден
+
+    # Применение JsonPath
     matches = [m.value for m in jp_parse(jsonPath).find(data)] if jsonPath else [data]
 
     def cmp(m):
+        m_str = str(m)
+        val_str = str(value)
         if op == "equals":
-            return str(m) == str(value)
+            return m_str == val_str
         if op == "notEquals":
-            return str(m) != str(value)
+            return m_str != val_str
         if op == "contains":
-            return str(value) in str(m)
-        if op == "greaterThan":
-            return float(m) > float(value)
-        if op == "lessThan":
-            return float(m) < float(value)
+            return val_str in m_str
+        # Для числового сравнения
+        try:
+            m_float = float(m)
+            val_float = float(value)
+            if op == "greaterThan":
+                return m_float > val_float
+            if op == "lessThan":
+                return m_float < val_float
+        except (ValueError, TypeError):
+            pass
         return False
 
     return any(cmp(m) for m in matches)

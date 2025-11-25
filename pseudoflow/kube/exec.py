@@ -1,18 +1,22 @@
 import time
 import uuid
+import os
 from typing import Dict, List, Optional
 
 from kubernetes import client
 
+# Получаем образ из ENV или используем дефолтный
+RUNNER_IMAGE = os.getenv("PSEUDOFLOW_RUNNER_IMAGE", "alpine:3.20")
+
 
 def run_pod_and_get_logs(
-    apis,
-    namespace: str,
-    command: str,
-    node_selector: Optional[Dict[str, str]] = None,
-    privileged: bool = False,
-    host_paths: Optional[List[Dict[str, str]]] = None,
-    timeout: int = 600,
+        apis,
+        namespace: str,
+        command: str,
+        node_selector: Optional[Dict[str, str]] = None,
+        privileged: bool = False,
+        host_paths: Optional[List[Dict[str, str]]] = None,
+        timeout: int = 600,
 ):
     core = apis["core"]
     name = f"pseudoflow-exec-{str(uuid.uuid4())[:8]}"
@@ -40,7 +44,10 @@ def run_pod_and_get_logs(
             )
 
     pod = client.V1Pod(
-        metadata=client.V1ObjectMeta(name=name),
+        metadata=client.V1ObjectMeta(
+            name=name,
+            labels={"created-by": "pseudoflow-operator"}  # Метка для удобства
+        ),
         spec=client.V1PodSpec(
             restart_policy="Never",
             node_selector=node_selector,
@@ -48,7 +55,7 @@ def run_pod_and_get_logs(
             containers=[
                 client.V1Container(
                     name="runner",
-                    image="alpine:3.20",
+                    image=RUNNER_IMAGE,  # <-- Используем конфигурируемый образ
                     command=["/bin/sh", "-lc", command],
                     security_context=client.V1SecurityContext(
                         privileged=privileged
@@ -67,22 +74,29 @@ def run_pod_and_get_logs(
 
     core.create_namespaced_pod(namespace=namespace, body=pod)
     end = time.time() + timeout
-    while time.time() < end:
-        p = core.read_namespaced_pod(name=name, namespace=namespace)
-        phase = (p.status.phase or "").lower()
-        if phase in ("succeeded", "failed"):
-            break
-        time.sleep(2)
-    logs = core.read_namespaced_pod_log(
-        name=name,
-        namespace=namespace,
-        _return_http_data_only=True,
-        _preload_content=True,
-    )
+
+    # Ожидание завершения пода
     try:
-        core.delete_namespaced_pod(
-            name=name, namespace=namespace, grace_period_seconds=0
+        while time.time() < end:
+            p = core.read_namespaced_pod(name=name, namespace=namespace)
+            phase = (p.status.phase or "").lower()
+            if phase in ("succeeded", "failed"):
+                break
+            time.sleep(2)
+
+        logs = core.read_namespaced_pod_log(
+            name=name,
+            namespace=namespace,
+            _return_http_data_only=True,
+            _preload_content=True,
         )
-    except Exception:
-        pass
+    finally:
+        # Гарантированное удаление пода даже в случае ошибки чтения логов
+        try:
+            core.delete_namespaced_pod(
+                name=name, namespace=namespace, grace_period_seconds=0
+            )
+        except Exception:
+            pass
+
     return logs
