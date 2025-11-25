@@ -4,8 +4,10 @@ import os
 
 import kopf
 
-from docs.engine import FlowEngine
-from docs.kube import ensure_crd_installed, get_k8s_api_clients
+# FIX: Импорты исправлены с docs.* на pseudoflow.*
+from pseudoflow.engine.runner import FlowEngine
+from pseudoflow.kube.crd import ensure_crd_installed
+from pseudoflow.kube.client import get_k8s_api_clients
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(

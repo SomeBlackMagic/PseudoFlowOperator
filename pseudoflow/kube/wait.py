@@ -6,15 +6,15 @@ from kubernetes.client import ApiException
 
 
 def wait_for_resource_condition(
-    apis,
-    res: Dict[str, Any],
-    condition: str,
-    timeout: int,
-    interval: int,
-    default_namespace: Optional[str] = None,
-    jsonpath: Optional[str] = None,
-    op: Optional[str] = None,
-    value: Optional[str] = None,
+        apis,
+        res: Dict[str, Any],
+        condition: str,
+        timeout: int,
+        interval: int,
+        default_namespace: Optional[str] = None,
+        jsonpath: Optional[str] = None,
+        op: Optional[str] = None,
+        value: Optional[str] = None,
 ):
     end = time.time() + timeout
     gv = res.get("apiVersion", "v1")
@@ -47,20 +47,21 @@ def wait_for_resource_condition(
             raise
 
     def ready():
+        # FIX: Переименовали obj -> resource_obj чтобы избежать shadowing
         if gv == "apps/v1" and kind == "Deployment":
-            obj = get_obj()
-            desired = obj.status.replicas or 0
-            avail = obj.status.available_replicas or 0
+            resource_obj = get_obj()
+            desired = resource_obj.status.replicas or 0
+            avail = resource_obj.status.available_replicas or 0
             return desired == avail and desired > 0
         if gv == "apps/v1" and kind == "DaemonSet":
-            obj = get_obj()
-            desired = obj.status.desired_number_scheduled or 0
-            rd = obj.status.number_ready or 0
+            resource_obj = get_obj()
+            desired = resource_obj.status.desired_number_scheduled or 0
+            rd = resource_obj.status.number_ready or 0
             return desired == rd and desired > 0
         if gv == "apps/v1" and kind == "StatefulSet":
-            obj = get_obj()
-            replicas = obj.status.replicas or 0
-            ready_replicas = obj.status.ready_replicas or 0
+            resource_obj = get_obj()
+            replicas = resource_obj.status.replicas or 0
+            ready_replicas = resource_obj.status.ready_replicas or 0
             return replicas == ready_replicas and replicas > 0
         return False
 
@@ -98,16 +99,18 @@ def wait_for_resource_condition(
             data = obj.to_dict()
             matches = [m.value for m in expr.find(data)]
             ok = False
+
+            # FIX: Исправлено использование переменной 'm' в генераторах
             if op == "equals":
-                ok = any(str(m) == str(value) for m in matches)
+                ok = any(str(x) == str(value) for x in matches)
             elif op == "notEquals":
-                ok = any(str(m) != str(value) for m in matches)
+                ok = any(str(x) != str(value) for x in matches)
             elif op == "contains":
-                ok = any(str(value) in str(m) for m in matches)
+                ok = any(str(value) in str(x) for x in matches)
             elif op == "greaterThan":
-                ok = any(float(m) > float(value)) if matches else False
+                ok = any(float(x) > float(value) for x in matches)
             elif op == "lessThan":
-                ok = any(float(m) < float(value)) if matches else False
+                ok = any(float(x) < float(value) for x in matches)
             else:
                 raise ValueError(f"Unsupported op {op}")
             if ok:

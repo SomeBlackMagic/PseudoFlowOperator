@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 from kubernetes import client
 
-# Получаем образ из ENV или используем дефолтный
+# Получаем образ из ENV (для поддержки air-gapped сред) или используем дефолтный
 RUNNER_IMAGE = os.getenv("PSEUDOFLOW_RUNNER_IMAGE", "alpine:3.20")
 
 
@@ -46,7 +46,10 @@ def run_pod_and_get_logs(
     pod = client.V1Pod(
         metadata=client.V1ObjectMeta(
             name=name,
-            labels={"created-by": "pseudoflow-operator"}  # Метка для удобства
+            labels={
+                "created-by": "pseudoflow-operator",
+                "pseudoflow.io/component": "exec-runner"
+            }
         ),
         spec=client.V1PodSpec(
             restart_policy="Never",
@@ -55,7 +58,7 @@ def run_pod_and_get_logs(
             containers=[
                 client.V1Container(
                     name="runner",
-                    image=RUNNER_IMAGE,  # <-- Используем конфигурируемый образ
+                    image=RUNNER_IMAGE,  # Используем переменную модуля
                     command=["/bin/sh", "-lc", command],
                     security_context=client.V1SecurityContext(
                         privileged=privileged
@@ -75,7 +78,8 @@ def run_pod_and_get_logs(
     core.create_namespaced_pod(namespace=namespace, body=pod)
     end = time.time() + timeout
 
-    # Ожидание завершения пода
+    logs = ""  # Инициализация переменной
+
     try:
         while time.time() < end:
             p = core.read_namespaced_pod(name=name, namespace=namespace)
@@ -84,14 +88,18 @@ def run_pod_and_get_logs(
                 break
             time.sleep(2)
 
+        # Пытаемся прочитать логи в любом случае
         logs = core.read_namespaced_pod_log(
             name=name,
             namespace=namespace,
             _return_http_data_only=True,
             _preload_content=True,
         )
+    except Exception:
+        # Логируем или игнорируем, если не удалось прочитать логи (например, под был убит)
+        pass
     finally:
-        # Гарантированное удаление пода даже в случае ошибки чтения логов
+        # Гарантированное удаление пода
         try:
             core.delete_namespaced_pod(
                 name=name, namespace=namespace, grace_period_seconds=0

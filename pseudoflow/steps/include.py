@@ -11,6 +11,8 @@ async def handle(step: dict, ctx: FlowContext) -> None:
     if not src:
         raise ValueError("include.source required")
 
+    manifests = ""  # FIX: Инициализация
+
     if src.startswith("http://") or src.startswith("https://"):
         resp = requests.get(src, timeout=20)
         resp.raise_for_status()

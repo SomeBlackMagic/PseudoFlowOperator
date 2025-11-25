@@ -15,8 +15,6 @@ from pseudoflow.util.templating import render_str
 logger = logging.getLogger("pseudoflow.engine")
 
 
-# ... (RunResult и FlowEngine остаются без изменений) ...
-
 class RunResult:
     def __init__(self):
         self.steps_ok = 0
@@ -237,7 +235,7 @@ def _eval_condition(apis, condition: Dict[str, Any], default_ns: Optional[str]) 
     res = condition.get("resource")
     if not res:
         return False
-    jsonPath = condition.get("jsonPath")
+    json_path = condition.get("jsonPath")  # Renamed to json_path for PEP8
     op = condition.get("op", "equals")
     value = condition.get("value", "")
 
@@ -273,9 +271,8 @@ def _eval_condition(apis, condition: Dict[str, Any], default_ns: Optional[str]) 
             elif kind == "Secret":
                 obj = core.read_namespaced_secret(name, ns)
             elif kind == "Node":
-                obj = core.read_node(name)  # Node не в namespace
+                obj = core.read_node(name)
             else:
-                # Попытка fallback, но core-методы специфичны
                 return False
 
         # 2. Apps Resources
@@ -289,9 +286,9 @@ def _eval_condition(apis, condition: Dict[str, Any], default_ns: Optional[str]) 
             else:
                 return False
 
-        # 3. Custom Resources (CRDs) и всё остальное через CustomObjectsApi
+        # 3. Custom Resources (CRDs) через CustomObjectsApi
         else:
-            # Превращаем kind в plural (простая эвристика, лучше бы иметь discovery)
+            # Простая эвристика для plural (можно улучшить через discovery, но для MVP достаточно)
             plural = kind.lower() + "s"
             try:
                 obj_dict = custom.get_namespaced_custom_object(
@@ -301,27 +298,26 @@ def _eval_condition(apis, condition: Dict[str, Any], default_ns: Optional[str]) 
                     plural=plural,
                     name=name
                 )
-                # CustomObjectsApi возвращает dict, а не объект модели
+                # CustomObjectsApi возвращает dict
                 data = obj_dict
-            except client.exceptions.ApiException as e:
-                if e.status != 404:
-                    logger.warning(f"Failed to fetch custom object: {e}")
+            except client.exceptions.ApiException:
                 return False
 
-    except Exception as e:
-        logger.debug(f"Resource check failed ({kind}/{name}): {e}")
+    except Exception:
         return False
 
     # Унификация данных (модель -> dict)
     if obj and not isinstance(obj, dict):
-        data = obj.to_dict()
+        try:
+            data = obj.to_dict()
+        except AttributeError:
+            data = obj
     elif obj:
         data = obj
-    else:
-        return False  # Объект не найден
+    elif 'data' not in locals():  # Если obj=None и мы не зашли в ветку custom
+        return False
 
-    # Применение JsonPath
-    matches = [m.value for m in jp_parse(jsonPath).find(data)] if jsonPath else [data]
+    matches = [m.value for m in jp_parse(json_path).find(data)] if json_path else [data]
 
     def cmp(m):
         m_str = str(m)
@@ -332,7 +328,7 @@ def _eval_condition(apis, condition: Dict[str, Any], default_ns: Optional[str]) 
             return m_str != val_str
         if op == "contains":
             return val_str in m_str
-        # Для числового сравнения
+
         try:
             m_float = float(m)
             val_float = float(value)
