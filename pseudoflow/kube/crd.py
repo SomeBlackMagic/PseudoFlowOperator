@@ -1,3 +1,10 @@
+import yaml
+from kubernetes import client, utils
+from kubernetes.client import ApiException
+
+from .client import get_k8s_api_clients
+
+_CRD = """
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
@@ -9,8 +16,7 @@ spec:
     kind: PseudoFlow
     plural: pseudoflows
     singular: pseudoflow
-    shortNames:
-      - pflow
+    shortNames: ["pflow"]
   versions:
     - name: v1alpha1
       served: true
@@ -30,8 +36,7 @@ spec:
                   type: array
                   items:
                     type: object
-                    required:
-                      - type
+                    required: ["type"]
                     properties:
                       type:
                         type: string
@@ -68,3 +73,16 @@ spec:
                       type: integer
             status:
               type: object
+"""
+
+
+def ensure_crd_installed() -> None:
+    apis = get_k8s_api_clients()
+    api_ext = client.ApiextensionsV1Api()
+    try:
+        api_ext.read_custom_resource_definition("pseudoflows.ops.example.com")
+        return
+    except ApiException as e:
+        if e.status != 404:
+            raise
+    utils.create_from_yaml(apis["dyn"], yaml_objects=list(yaml.safe_load_all(_CRD)))
